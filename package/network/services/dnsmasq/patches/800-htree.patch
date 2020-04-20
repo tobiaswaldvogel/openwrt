@@ -1,0 +1,1316 @@
+diff --git a/Makefile b/Makefile
+index 78e25f0..7863cc4 100644
+--- a/Makefile
++++ b/Makefile
+@@ -75,7 +75,7 @@ copts_conf = .copts_$(sum)
+ objs = cache.o rfc1035.o util.o option.o forward.o network.o \
+        dnsmasq.o dhcp.o lease.o rfc2131.o netlink.o dbus.o bpf.o \
+        helper.o tftp.o log.o conntrack.o dhcp6.o rfc3315.o \
+-       dhcp-common.o outpacket.o radv.o slaac.o auth.o ipset.o \
++       dhcp-common.o outpacket.o radv.o slaac.o auth.o ipset.o htree.o \
+        domain.o dnssec.o blockdata.o tables.o loop.o inotify.o \
+        poll.o rrfilter.o edns0.o arp.o crypto.o dump.o ubus.o metrics.o
+ 
+diff --git a/src/dnsmasq.c b/src/dnsmasq.c
+index 6e44c12..c5e919e 100644
+--- a/src/dnsmasq.c
++++ b/src/dnsmasq.c
+@@ -318,7 +318,7 @@ int main (int argc, char **argv)
+ #endif
+ 
+ #ifdef HAVE_IPSET
+-  if (daemon->ipsets)
++  if (daemon->htree_ipsets)
+     {
+       ipset_init();
+ #  ifdef HAVE_LINUX_NETWORK
+diff --git a/src/dnsmasq.h b/src/dnsmasq.h
+index b877fbb..552cacb 100644
+--- a/src/dnsmasq.h
++++ b/src/dnsmasq.h
+@@ -557,10 +557,31 @@ struct server {
+   struct server *next; 
+ };
+ 
+-struct ipsets {
+-  char **sets;
+-  char *domain;
+-  struct ipsets *next;
++struct htree_node {
++  char *label;              /* key */
++  void *ptr;
++  uint32_t h1;              /* from hash function 1 */
++  /*
++   * hash value from hash function 2, used for double hashing in open
++   * addressing hash table
++   */
++  uint32_t h2;
++  struct htree_node **sub;  /* the hash table */
++  unsigned sub_size;        /* size of hash table */
++  int sub_count;            /* items stored in hash table */
++  int sub_loadmax;          /* max items stored before upsizing sub */
++  int sub_maxprobe;         /* max probes for insertion, upsizing upon reach */
++};
++
++struct special_domain {
++  struct server *server;
++  union mysockaddr addr;
++  int domain_flags;
++};
++
++struct ipsets_names {
++  char **sets;          /* ipsets names end with NULL ptr */
++  int    count;
+ };
+ 
+ struct irec {
+@@ -1024,7 +1045,11 @@ extern struct daemon {
+   struct iname *if_names, *if_addrs, *if_except, *dhcp_except, *auth_peers, *tftp_interfaces;
+   struct bogus_addr *bogus_addr, *ignore_addr;
+   struct server *servers;
+-  struct ipsets *ipsets;
++  struct htree_node *htree_ipsets;  /* for --ipset domain names*/
++  /* setnames stored here to reduce redundancy */
++  struct htree_node *htree_ipset_names;
++  /* for --server/local/address/rebind-domain-ok domain names */
++  struct htree_node *htree_special_domains;
+   int log_fac; /* log facility */
+   char *log_file; /* optional log file */
+   int max_logs;  /* queue limit */
+@@ -1490,6 +1515,17 @@ void ipset_init(void);
+ int add_to_ipset(const char *setname, const union all_addr *ipaddr, int flags, int remove);
+ #endif
+ 
++/* htree.c */
++#define MAXLABELS 128
++struct htree_node *htree_new_node(char *label, int len);
++struct htree_node *htree_find_or_add(struct htree_node *node, char *label);
++struct htree_node *domain_match(struct htree_node *root, char *domain);
++struct htree_node *domain_find_or_add(struct htree_node *root, char *domain);
++struct server *lookup_or_install_new_server(struct server *serv);
++void htree_free (struct htree_node *node);
++void print_server_special_domains(struct htree_node *node,
++                                  char *parents[], int current_level);
++
+ /* helper.c */
+ #if defined(HAVE_SCRIPT)
+ int create_helper(int event_fd, int err_fd, uid_t uid, gid_t gid, long max_fd);
+diff --git a/src/forward.c b/src/forward.c
+index fde554d..488bd81 100644
+--- a/src/forward.c
++++ b/src/forward.c
+@@ -106,6 +106,82 @@ int send_from(int fd, int nowild, char *packet, size_t len,
+   return 1;
+ }
+           
++/* search domain pattern for --address, --local, --server, --rebind-domain-ok
++
++   if matches --address, the address is stored in addrpp
++
++   if matches --server, a pointer to one of servers in daemon->servers is
++   stored in fwdserv, unless --server=/example.org/#, in which case fwdserv
++   will be NULL, means use normal server
++
++   if matches --rebind-domain-ok, the passed in norebind will be set to 1
++
++   we find longest match, e.g. given pattern debian.org and cn.debian.org,
++   ftp.cn.debian.org  will match cn.debian.org
++ */
++static unsigned int
++search_servers (time_t now, union all_addr **addrpp,
++                unsigned int qtype, char *qdomain, int *type,
++                char **domain, int *norebind, struct server **fwdserv)
++{
++  unsigned int namelen = strlen(qdomain);
++  unsigned int flags = 0;
++  unsigned int sflag;
++  struct htree_node *np;
++  struct special_domain *obj;
++
++  *type = 0;
++  /* label of root node is "#", means --address=/#/1.2.3.4 */
++  if (daemon->htree_special_domains && daemon->htree_special_domains->label &&
++                                  *daemon->htree_special_domains->label == '#')
++    np = daemon->htree_special_domains;
++  else
++    np = domain_match (daemon->htree_special_domains, qdomain);
++
++  if (np != NULL)
++    {
++      obj = (struct special_domain *) np->ptr;
++
++      *type |= SERV_HAS_DOMAIN;
++
++      if (obj->domain_flags & SERV_NO_REBIND)
++        *norebind = 1;
++
++      /* no server, domain is local only */
++      if (obj->domain_flags & SERV_NO_ADDR)
++        flags = F_NXDOMAIN;
++      else if (obj->domain_flags & SERV_LITERAL_ADDRESS)
++	{
++	  /* --address and AF matches */
++	  sflag = obj->addr.sa.sa_family == AF_INET ? F_IPV4 : F_IPV6;
++	  if (sflag & qtype)
++	    {
++	      flags = sflag;
++	      if (obj->addr.sa.sa_family == AF_INET)
++		*addrpp = (union all_addr *) &obj->addr.in.sin_addr;
++	      else
++		*addrpp = (union all_addr *) &obj->addr.in6.sin6_addr;
++	    }
++	}
++      else if (obj->domain_flags & SERV_USE_RESOLV)
++	{
++	  /* --server=8.8.8.8 */
++	  *type = 0;  /* use normal server */
++	  *fwdserv = NULL;
++	} 
++      else
++	{
++	  *fwdserv = obj->server;
++	  flags = 0;
++	}
++    }
++  else
++    {
++      *type = 0;  /* use normal servers for this domain */
++      *fwdserv = NULL;
++    }
++
++#ifdef never
+ static unsigned int search_servers(time_t now, union all_addr **addrpp, unsigned int qtype,
+ 				   char *qdomain, int *type, char **domain, int *norebind)
+ 			      
+@@ -217,6 +293,7 @@ static unsigned int search_servers(time_t now, union all_addr **addrpp, unsigned
+ 	  }
+       }
+   
++#endif
+   if (flags == 0 && !(qtype & (F_QUERY | F_DNSSECOK)) && 
+       option_bool(OPT_NODOTS_LOCAL) && !strchr(qdomain, '.') && namelen != 0)
+     /* don't forward A or AAAA queries for simple names, except the empty name */
+@@ -255,7 +332,7 @@ static int forward_query(int udpfd, union mysockaddr *udpaddr,
+   int type = SERV_DO_DNSSEC, norebind = 0;
+   union all_addr *addrp = NULL;
+   unsigned int flags = 0;
+-  struct server *start = NULL;
++  struct server *start = NULL, *fwdserv = NULL;
+ #ifdef HAVE_DNSSEC
+   void *hash = hash_questions(header, plen, daemon->namebuff);
+   int do_dnssec = 0;
+@@ -340,7 +417,7 @@ static int forward_query(int udpfd, union mysockaddr *udpaddr,
+   else 
+     {
+       if (gotname)
+-	flags = search_servers(now, &addrp, gotname, daemon->namebuff, &type, &domain, &norebind);
++	flags = search_servers(now, &addrp, gotname, daemon->namebuff, &type, &domain, &norebind, &fwdserv);
+       
+ #ifdef HAVE_DNSSEC
+       do_dnssec = type & SERV_DO_DNSSEC;
+@@ -457,9 +534,13 @@ static int forward_query(int udpfd, union mysockaddr *udpaddr,
+ 	     domain may be NULL, in which case server->domain 
+ 	     must be NULL also. */
+ 	  
+-	  if (type == (start->flags & SERV_TYPE) &&
++	  if (fwdserv)
++	    start = fwdserv;
++
++	  if (fwdserv ||
++	      (type == (start->flags & SERV_TYPE) &&
+ 	      (type != SERV_HAS_DOMAIN || hostname_isequal(domain, start->domain)) &&
+-	      !(start->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP)))
++	      !(start->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP))))
+ 	    {
+ 	      int fd;
+ 
+@@ -544,6 +625,9 @@ static int forward_query(int udpfd, union mysockaddr *udpaddr,
+ 		}
+ 	    } 
+ 	  
++	  if (fwdserv)
++	    break;
++
+ 	  if (!(start = start->next))
+  	    start = daemon->servers;
+ 	  
+@@ -580,29 +664,21 @@ static size_t process_reply(struct dns_header *header, time_t now, struct server
+   int munged = 0, is_sign;
+   unsigned int rcode = RCODE(header);
+   size_t plen; 
++  struct htree_node *np;
++  struct ipsets_names *obj;
+   
+   (void)ad_reqd;
+   (void)do_bit;
+   (void)bogusanswer;
+ 
+ #ifdef HAVE_IPSET
+-  if (daemon->ipsets && extract_request(header, n, daemon->namebuff, NULL))
++  if (daemon->htree_ipsets && extract_request(header, n, daemon->namebuff, NULL))
+     {
+-      /* Similar algorithm to search_servers. */
+-      struct ipsets *ipset_pos;
+-      unsigned int namelen = strlen(daemon->namebuff);
+-      unsigned int matchlen = 0;
+-      for (ipset_pos = daemon->ipsets; ipset_pos; ipset_pos = ipset_pos->next) 
++      np = domain_match(daemon->htree_ipsets, daemon->namebuff);
++      if (np != NULL)
+ 	{
+-	  unsigned int domainlen = strlen(ipset_pos->domain);
+-	  char *matchstart = daemon->namebuff + namelen - domainlen;
+-	  if (namelen >= domainlen && hostname_isequal(matchstart, ipset_pos->domain) &&
+-	      (domainlen == 0 || namelen == domainlen || *(matchstart - 1) == '.' ) &&
+-	      domainlen >= matchlen) 
+-	    {
+-	      matchlen = domainlen;
+-	      sets = ipset_pos->sets;
+-	    }
++	  obj = (struct ipsets_names *) np->ptr;
++	  sets = obj->sets;
+ 	}
+     }
+ #endif
+@@ -767,7 +843,7 @@ void reply_query(int fd, int family, time_t now)
+   socklen_t addrlen = sizeof(serveraddr);
+   ssize_t n = recvfrom(fd, daemon->packet, daemon->packet_buff_sz, 0, &serveraddr.sa, &addrlen);
+   size_t nn;
+-  struct server *server;
++  struct server *server, *fwdserv;
+   void *hash;
+ #ifndef HAVE_DNSSEC
+   unsigned int crc;
+@@ -1056,33 +1132,38 @@ void reply_query(int fd, int family, time_t now)
+ 		      /* Find server to forward to. This will normally be the 
+ 			 same as for the original query, but may be another if
+ 			 servers for domains are involved. */		      
+-		      if (search_servers(now, NULL, F_DNSSECOK, daemon->keyname, &type, &domain, NULL) == 0)
++		      if (search_servers(now, NULL, F_DNSSECOK, daemon->keyname, &type, &domain, NULL, &fwdserv) == 0)
+ 			{
+-			  struct server *start, *new_server = NULL;
+-			  start = server = forward->sentto;
+-			  
+-			  while (1)
++			  if (fwdserv)
++			    server = fwdserv;
++			  else
+ 			    {
+-			      if (type == (start->flags & (SERV_TYPE | SERV_DO_DNSSEC)) &&
+-				  ((type & SERV_TYPE) != SERV_HAS_DOMAIN || hostname_isequal(domain, start->domain)) &&
+-				  !(start->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP)))
++			      struct server *start, *new_server = NULL;
++			      start = server = forward->sentto;
++			  
++			      while (1)
+ 				{
+-				  new_server = start;
+-				  if (server == start)
++				  if (type == (start->flags & (SERV_TYPE | SERV_DO_DNSSEC)) &&
++				      ((type & SERV_TYPE) != SERV_HAS_DOMAIN || hostname_isequal(domain, start->domain)) &&
++				      !(start->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP)))
+ 				    {
+-				      new_server = NULL;
+-				      break;
++				      new_server = start;
++				      if (server == start)
++					{
++					  new_server = NULL;
++					  break;
++					}
+ 				    }
+-				}
+ 			      
+-			      if (!(start = start->next))
+-				start = daemon->servers;
+-			      if (start == server)
+-				break;
+-			    }
++				  if (!(start = start->next))
++				    start = daemon->servers;
++				  if (start == server)
++				    break;
++				}
+ 			  
+-			  if (new_server)
+-			    server = new_server;
++			      if (new_server)
++				server = new_server;
++			    }
+ 			}
+ 		      
+ 		      new->sentto = server;
+@@ -1595,6 +1676,7 @@ static int tcp_key_recurse(time_t now, int status, struct dns_header *header, si
+   unsigned char *payload = NULL;
+   struct dns_header *new_header = NULL;
+   u16 *length = NULL;
++  struct server *fwdserv = NULL;
+  
+   while (1)
+     {
+@@ -1643,7 +1725,7 @@ static int tcp_key_recurse(time_t now, int status, struct dns_header *header, si
+       /* Find server to forward to. This will normally be the 
+ 	 same as for the original query, but may be another if
+ 	 servers for domains are involved. */		      
+-      if (search_servers(now, NULL, F_DNSSECOK, keyname, &type, &domain, NULL) != 0)
++      if (search_servers(now, NULL, F_DNSSECOK, keyname, &type, &domain, NULL, &fwdserv) != 0)
+ 	{
+ 	  new_status = STAT_ABANDONED;
+ 	  break;
+@@ -1654,10 +1736,10 @@ static int tcp_key_recurse(time_t now, int status, struct dns_header *header, si
+ 	  int data_sent = 0;
+ 	  
+ 	  if (!firstsendto)
+-	    firstsendto = server;
++	    firstsendto = fwdserv ? fwdserv : server;
+ 	  else
+ 	    {
+-	      if (!(server = server->next))
++	      if (!fwdserv && !(server = server->next))
+ 		server = daemon->servers;
+ 	      if (server == firstsendto)
+ 		{
+@@ -1777,7 +1859,8 @@ unsigned char *tcp_request(int confd, time_t now,
+   /* largest field in header is 16-bits, so this is still sufficiently aligned */
+   struct dns_header *header = (struct dns_header *)payload;
+   u16 *length = (u16 *)packet;
+-  struct server *last_server;
++  struct server *last_server, *fwdserv, *serv;
++  int ret;
+   struct in_addr dst_addr_4;
+   union mysockaddr peer_addr;
+   socklen_t peer_len = sizeof(union mysockaddr);
+@@ -1940,7 +2023,7 @@ unsigned char *tcp_request(int confd, time_t now,
+ 	      size = add_edns0_config(header, size, ((unsigned char *) header) + 65536, &peer_addr, now, &check_subnet);
+ 
+ 	      if (gotname)
+-		flags = search_servers(now, &addrp, gotname, daemon->namebuff, &type, &domain, &norebind);
++		flags = search_servers(now, &addrp, gotname, daemon->namebuff, &type, &domain, &norebind, &fwdserv);
+ 
+ #ifdef HAVE_DNSSEC
+ 	      if (option_bool(OPT_DNSSEC_VALID) && (type & SERV_DO_DNSSEC))
+@@ -1986,10 +2069,10 @@ unsigned char *tcp_request(int confd, time_t now,
+ 		      int data_sent = 0;
+ 
+ 		      if (!firstsendto)
+-			firstsendto = last_server;
++			firstsendto = fwdserv ? fwdserv : last_server;
+ 		      else
+ 			{
+-			  if (!(last_server = last_server->next))
++			  if (!fwdserv && !(last_server = last_server->next))
+ 			    last_server = daemon->servers;
+ 			  
+ 			  if (last_server == firstsendto)
+@@ -1997,9 +2080,10 @@ unsigned char *tcp_request(int confd, time_t now,
+ 			}
+ 		      
+ 		      /* server for wrong domain */
+-		      if (type != (last_server->flags & SERV_TYPE) ||
++		      if (!fwdserv &&
++			  (type != (last_server->flags & SERV_TYPE) ||
+ 			  (type == SERV_HAS_DOMAIN && !hostname_isequal(domain, last_server->domain)) ||
+-			  (last_server->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP)))
++			  (last_server->flags & (SERV_LITERAL_ADDRESS | SERV_LOOP))))
+ 			continue;
+ 
+ 		    retry:
+diff --git a/src/htree.c b/src/htree.c
+new file mode 100644
+index 0000000..dcbdc79
+--- /dev/null
++++ b/src/htree.c
+@@ -0,0 +1,486 @@
++/*  htree.c Chen Wei <weichen302 at gmail.com>
++
++    Use cascade of open addressing hash tables to store config options that
++    involve domain names.
++
++                       root
++                        |
++             +---------------------+
++            com                   org
++             |                     |
++    +------------------+     +-------------+
++    yahoo google twitter   debian       freebsd
++      |      |               |             |
++     www    mail          +---------+     www
++                          cn jp uk us
++                          |
++                         ftp
++
++    The lookup steps over domain name hierarchy top-down. All labels are stored
++    in open addressing hash tables. Sub-level labels that belong to different
++    parent nodes are stored separately. e.g. yahoo, google, and twitter are in
++    one hash table, while debian and freebsd are in another.
++
++    The hash table size is power of 2, two hash functions are used to compute
++    hash bucket. For locating a particular label from hash table, two hash
++    values are compared first, only if they are match, should the more
++    expensive string comparison be used to confirm the search.
++
++
++    This program is free software; you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation; version 2 dated June, 1991, or
++    (at your option) version 3 dated 29 June, 2007.
++
++    This program is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with this program. If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "dnsmasq.h"
++
++#define OPEN_ADDRESSING_MAXPROBE 7
++#define OPEN_ADDRESSING_DEFAULT_SIZE 4
++#define FNV1_32A_INIT ((uint32_t)0x811c9dc5)
++#define max(A, B) ((A) > (B) ? (A) : (B))
++
++static char buf[MAXDNAME];
++
++/* prototypes */
++static struct htree_node *htree_find (struct htree_node *node, char *label);
++static void htree_add (struct htree_node *node, struct htree_node *sub);
++static void htree_upsizing (struct htree_node *np);
++static inline void normalize_domain_name (char *dst, char *src, int len);
++
++/* hash function 1 for double hashing
++ * 32 bit Fowler/Noll/Vo hash */
++static inline uint32_t dblhash_1 (char *key)
++{
++  uint32_t hval = FNV1_32A_INIT;
++  unsigned char *s = (unsigned char *) key;
++
++  while (*s)
++    {
++      hval ^= (uint32_t) * s++;
++      hval +=
++        (hval << 1) + (hval << 4) + (hval << 7) + (hval << 8) + (hval << 24);
++    }
++
++  return hval;
++}
++
++/* hash function 2 for double hashing
++ * modified Shift-Add-XOR hash, return an odd number */
++static inline uint32_t dblhash_2 (char *key)
++{
++  uint32_t h = 0;
++  unsigned char *s = (unsigned char *) key;
++
++  while (*s)
++    h ^= (h << 5) + (h >> 2) + *s++;
++
++  return h % 2 ? h : h + 1;
++}
++
++/* convert domain to lower cases, remove leading blank, leading and trailing
++ * dot. End string with \0 */
++static inline void normalize_domain_name (char *d, char *s, int len)
++{
++  int i;
++
++  /* skip leading dot and blank */
++  for ( ; *s != '\0' && (*s == '.' || *s == '\t' || *s == ' '); s++)
++    ;
++
++  for (i = 0; i < len && *s != '\0'; i++, s++)
++    {
++      if (*s >= 'A' && *s <= 'Z')
++        d[i] = *s + 'a' - 'A';
++      else
++        d[i] = *s;
++    }
++
++  /* should not happen since the source string limited to MAXDNAME */
++  if (i == len)
++    i--;
++
++  for ( ; d[i] == '.'; i--)
++    ;
++
++  if (i < (len - 1))
++    d[++i] = '\0';
++  else
++    /* something wrong with the source string(domain name), it exceeds
++     * MAXDNAME, terminate the dst string with '\0' anyway */
++    d[i] = '\0';
++}
++
++struct htree_node * htree_init_sub (struct htree_node *node)
++{
++  unsigned n;
++
++  if (node->sub != NULL)
++    return node;
++
++  node->sub_size = OPEN_ADDRESSING_DEFAULT_SIZE;
++  node->sub_loadmax = node->sub_size * 3 / 4;    /* max loading factor 0.75 */
++  node->sub = safe_malloc (node->sub_size * sizeof (struct htree_node *));
++  for (n = 0; n < node->sub_size; n++)
++    node->sub[n] = NULL;
++
++  return node;
++}
++
++/* allocate and initialize a new node */
++struct htree_node * htree_new_node (char *label, int label_len)
++{
++  struct htree_node *node;
++
++  node = safe_malloc (sizeof (struct htree_node));
++  if (node == NULL)
++    return NULL;
++
++  if (label == NULL || label_len == 0)
++    {
++      node->h1 = 0;
++      node->h2 = 0;
++      node->label = NULL;
++    }
++  else
++    {
++      node->label = strdup (label);
++      node->h1 = dblhash_1 (label);
++      node->h2 = dblhash_2 (label);
++    }
++
++  node->sub_count = 0;
++  node->sub_size = 0;
++  node->sub_loadmax = 0;
++  node->sub_maxprobe = 0;
++  node->sub = NULL;
++  node->ptr = NULL;
++
++  return node;
++}
++
++/* double the size of hash table attached to a htree_node, it calls with
++ * htree_add with each other. The table size starts with 2^2, so that the new
++ * size remains 2^x, the double hash used is chosen to work with 2^n slots */
++static void htree_upsizing (struct htree_node *np)
++{
++  struct htree_node **oldnodes;
++  unsigned i, oldsize;
++
++  oldsize = np->sub_size;
++  oldnodes = np->sub;
++  np->sub_size = oldsize * 2;
++  np->sub_loadmax = np->sub_size * 3 / 4;
++  np->sub_count = 0;
++  np->sub_maxprobe = 0;
++  np->sub = safe_malloc (np->sub_size * sizeof (struct htree_node *));
++  for (i = 0; i < np->sub_size; i++)
++    np->sub[i] = NULL;
++
++  for (i = 0; i < oldsize; i++)
++    {
++      if (oldnodes[i] != NULL)
++        {
++          htree_add (np, oldnodes[i]);
++        }
++    }
++
++  free (oldnodes);
++}
++
++/* add a sub-node, upsize if needed, calls with htree_upsizing with each other */
++static void htree_add (struct htree_node *node, struct htree_node *sub)
++{
++  int n;
++  uint32_t dh, idx;
++
++  if (node->sub == NULL)
++    htree_init_sub (node);
++
++  n = 0;
++  dh = sub->h1;
++  while (1)
++    {
++      /* eq to dh % node->sub_size, since sub_size is power of 2*/
++      idx = dh & (node->sub_size - 1);
++      if (node->sub[idx] == NULL)
++        {
++          node->sub[idx] = sub;
++          node->sub_count += 1;
++          break;
++        }
++      else
++        {
++          dh += sub->h2;
++          n++;
++        }
++    }
++
++  node->sub_maxprobe = max (n, node->sub_maxprobe);
++  /*
++   * If it takes a lots of probes to find an empty slot, or the used slots
++   * close to loading max, upsize the table
++   */
++  if (node->sub_maxprobe > OPEN_ADDRESSING_MAXPROBE ||
++      node->sub_count > node->sub_loadmax)
++    {
++      htree_upsizing (node);
++    }
++
++  return;
++}
++
++struct htree_node *htree_find_or_add (struct htree_node *node, char *label)
++{
++  struct htree_node *np;
++
++  if ((np = htree_find (node, label)) == NULL)
++    {
++      if (node->sub == NULL)
++        htree_init_sub (node);
++      np = htree_new_node (label, strlen (label));
++      htree_add (node, np);
++    }
++
++  return np;
++}
++
++/* lookup the label in node's sub, return the pointer, NULL if not found */
++static struct htree_node *htree_find (struct htree_node *node, char *label)
++{
++  uint32_t h1, h2, dh, idx;
++  struct htree_node *np;
++
++  /* this domain doesn't have sub-domains */
++  if (node->sub == NULL)
++    return NULL;
++
++  dh = h1 = dblhash_1 (label);
++  h2 = dblhash_2 (label);
++  idx = dh & (node->sub_size - 1);
++  while ((np = node->sub[idx]) != NULL)
++    {
++      if (np->h1 == h1 && np->h2 == h2)
++        if (strcmp (np->label, label) == 0)
++          return np;
++
++      dh += h2;
++      idx = dh & (node->sub_size - 1);
++    }
++
++  return NULL;
++}
++
++/* look up the whole domain pattern by step over DNS name hierarchy top down.
++ * for example, if the pattern is cn.debian.org, the lookup will start with
++ * org, then debian, then cn. The longest pattern wins. */
++struct htree_node * domain_match(struct htree_node *root, char *domain)
++{
++  char *labels[MAXLABELS];
++  int i, label_num;
++  int len = (int) sizeof(buf);
++  struct htree_node *node, *res;
++
++  if (root == NULL)
++    return NULL;
++
++  memset(buf, 0, sizeof(buf));
++  normalize_domain_name (buf, domain, len);
++
++  for (i = 0; i < MAXLABELS; i++)
++    labels[i] = NULL;
++
++  label_num = 0;
++  labels[label_num++] = &buf[0];
++
++  /* split domain name into labels */
++  for (i = 0; i < len && buf[i] != '\0'; i++)
++    {
++      if (buf[i] == '.')
++        {
++          buf[i] = '\0';
++          labels[label_num++] = &buf[i + 1];
++        }
++    }
++
++  node = root;
++  res = NULL;
++  for (i = label_num - 1; i >= 0; i--)
++    {
++      node = htree_find (node, labels[i]);
++      if (node == NULL)
++        break;
++
++      /* repeatedly overwrite with node that has option set while walk down the
++       * domain name tree to match config option with longest pattern */
++      if (node->ptr != NULL)
++        res = node;
++    }
++
++  return res;
++}
++
++/* add a domain pattern in the form of debian.org to root or find the node
++ * match the domain pattern (for modify) */
++struct htree_node *domain_find_or_add (struct htree_node *root, char *domain)
++{
++  char *labels[MAXLABELS];
++  int i, label_num;
++  int len = (int) sizeof(buf);
++  struct htree_node *node;
++
++  memset(buf, 0, sizeof(buf));
++  normalize_domain_name (buf, domain, len);
++
++  for (i = 0; i < MAXLABELS; i++)
++    labels[i] = NULL;
++
++  label_num = 0;
++  labels[label_num++] = &buf[0];
++
++  for (i = 0; i < len && buf[i] != '\0'; i++)
++    {
++      if (buf[i] == '.')
++        {
++          buf[i] = '\0';
++          labels[label_num++] = &buf[i + 1];
++        }
++    }
++
++  node = root;
++  for (i = label_num - 1; i >= 0; i--)
++    node = htree_find_or_add (node, labels[i]);
++
++  return node;
++}
++
++/* free node and all sub-nodes recursively. Unused. */
++void htree_free (struct htree_node *node)
++{
++  struct htree_node *np;
++  unsigned i;
++
++  if (node->sub_count > 0)
++    {
++      for (i = 0; i < node->sub_size; i++)
++        {
++          np = node->sub[i];
++          if (np != NULL)
++            {
++              if (np->label != NULL)
++                free (np->label);
++
++              if (np->ptr != NULL)
++                free (np->ptr);
++
++              htree_free (np);
++            }
++        }
++      free (node->sub);
++    }
++
++  free (node);
++}
++
++/* only compare addr, source_addr, interface, and flags */
++static inline int is_same_server(struct server *s1, struct server *s2)
++{
++    if (memcmp(&s1->addr, &s2->addr, sizeof(union mysockaddr)) != 0)
++        return 0;
++
++    if (strncmp(s1->interface, s2->interface, IF_NAMESIZE + 1) != 0)
++        return 0;
++
++    if (s1->flags != s2->flags)
++        return 0;
++
++    return 1;
++}
++
++/* duplicate a struct server, but only copy addr, source_addr, interfaces, and
++ * flags
++ * return the allocated pointer */
++static inline struct server *serverdup(struct server *src)
++{
++    struct server *dst;
++
++    dst = safe_malloc(sizeof(struct server));
++    memcpy(dst, src, sizeof(struct server));
++
++    return dst;
++}
++
++/* lookup server by compare addr, source_addr, interface, and flags with
++ * servers in daemon->servers link list. If no match found, then insert a new
++ * server
++ *
++ * Return the lookup result or the newly created server */
++struct server *lookup_or_install_new_server(struct server *serv)
++{
++    struct server *res;
++
++    res = NULL;
++    for (res = daemon->servers; res != NULL; res = res->next) {
++        if (is_same_server(res, serv))
++            break;
++    }
++
++    if (res == NULL) {
++        res = serverdup(serv);
++        res->next = daemon->servers;
++        daemon->servers = res;
++    }
++
++    return res;
++}
++
++/* print the daemon->htree_special_domains tree recursively */
++void print_server_special_domains (struct htree_node *node,
++                                   char *parents[], int current_level)
++{
++  struct htree_node *np;
++  struct special_domain *obj;
++  char buf[MAXDNAME];
++  char ip_buf[16];
++  int j, level;
++  int port = 0;
++  uint32_t i;
++
++  level = current_level + 1;
++  if (node->label != NULL)
++    {
++      parents[level] = node->label;
++      if (node->ptr != NULL)
++        {
++          obj = (struct special_domain *) node->ptr;
++          if (obj->domain_flags & SERV_HAS_DOMAIN)
++            {
++              memset (buf, 0, MAXDNAME);
++              for (j = level; j > 1; j--)
++                {
++                  strcat (buf, parents[j]);
++                  strcat (buf, ".");
++                }
++              buf[strlen (buf) - 1] = '\0';
++              port = prettyprint_addr (&obj->server->addr, ip_buf);
++              my_syslog(LOG_INFO, _("using nameserver %s#%d for domain %s"),
++                                    ip_buf, port, buf);
++            }
++        }
++    }
++
++  if (node->sub_count > 0)
++    {
++      for (i = 0; i < node->sub_size; i++)
++        if ((np = node->sub[i]) != NULL)
++          print_server_special_domains (np, parents, level);
++    }
++}
+diff --git a/src/network.c b/src/network.c
+index 4bada37..92a2833 100644
+--- a/src/network.c
++++ b/src/network.c
+@@ -1445,6 +1445,10 @@ void check_servers(void)
+   if (!option_bool(OPT_NOWILD))
+     enumerate_interfaces(0);
+ 
++  char *levels[MAXLABELS + 1];  /* the root node starts at 1 */
++  struct htree_node *root = daemon->htree_special_domains;
++  print_server_special_domains(root, levels, 0);
++
+   /* don't garbage collect pre-allocated sfds. */
+   for (sfd = daemon->sfds; sfd; sfd = sfd->next)
+     sfd->used = sfd->preallocated;
+@@ -1525,7 +1529,7 @@ void check_servers(void)
+ 	  if (++count > SERVERS_LOGGED)
+ 	    continue;
+ 	  
+-	  if (serv->flags & (SERV_HAS_DOMAIN | SERV_FOR_NODOTS | SERV_USE_RESOLV))
++	  if (serv->flags & (SERV_FOR_NODOTS | SERV_USE_RESOLV))
+ 	    {
+ 	      char *s1, *s2, *s3 = "";
+ #ifdef HAVE_DNSSEC
+@@ -1534,8 +1538,6 @@ void check_servers(void)
+ #endif
+ 	      if (!(serv->flags & SERV_HAS_DOMAIN))
+ 		s1 = _("unqualified"), s2 = _("names");
+-	      else if (strlen(serv->domain) == 0)
+-		s1 = _("default"), s2 = "";
+ 	      else
+ 		s1 = _("domain"), s2 = serv->domain;
+ 	      
+diff --git a/src/option.c b/src/option.c
+index 1f698da..ab7625b 100644
+--- a/src/option.c
++++ b/src/option.c
+@@ -2546,92 +2546,161 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
+     case 'A':            /*  --address */
+     case LOPT_NO_REBIND: /*  --rebind-domain-ok */
+       {
+-	struct server *serv, *newlist = NULL;
+-	
+-	unhide_metas(arg);
+-	
+-	if (arg && (*arg == '/' || option == LOPT_NO_REBIND))
+-	  {
+-	    int rebind = !(*arg == '/');
+-	    char *end = NULL;
+-	    if (!rebind)
+-	      arg++;
+-	    while (rebind || (end = split_chr(arg, '/')))
+-	      {
+-		char *domain = NULL;
+-		/* elide leading dots - they are implied in the search algorithm */
+-		while (*arg == '.') arg++;
+-		/* # matches everything and becomes a zero length domain string */
+-		if (strcmp(arg, "#") == 0)
+-		  domain = "";
+-		else if (strlen (arg) != 0 && !(domain = canonicalise_opt(arg)))
+-		  ret_err(gen_err);
+-		serv = opt_malloc(sizeof(struct server));
+-		memset(serv, 0, sizeof(struct server));
+-		serv->next = newlist;
+-		newlist = serv;
+-		serv->domain = domain;
+-		serv->flags = domain ? SERV_HAS_DOMAIN : SERV_FOR_NODOTS;
+-		arg = end;
+-		if (rebind)
+-		  break;
+-	      }
+-	    if (!newlist)
+-	      ret_err(gen_err);
+-	  }
+-	else
+-	  {
+-	    newlist = opt_malloc(sizeof(struct server));
+-	    memset(newlist, 0, sizeof(struct server));
++	unhide_metas (arg);
++
++	char *start_addr, *s;
++	char *err;
++	struct server newserv;
++	struct htree_node *np = NULL;
++	struct special_domain *obj;
++
++	memset (&newserv, 0, sizeof (struct server));
+ #ifdef HAVE_LOOP
+-	    newlist->uid = rand32();
++	newserv.uid = rand32 ();
+ #endif
+-	  }
+-	
+-	if (servers_only && option == 'S')
+-	  newlist->flags |= SERV_FROM_FILE;
+-	
+-	if (option == 'A')
+-	  {
+-	    newlist->flags |= SERV_LITERAL_ADDRESS;
+-	    if (!(newlist->flags & SERV_TYPE))
+-	      {
+-	        server_list_free(newlist);
+-	        ret_err(gen_err);
+-	      }
+-	  }
+-	else if (option == LOPT_NO_REBIND)
+-	  newlist->flags |= SERV_NO_REBIND;
+-	
+-	if (!arg || !*arg)
++	if (arg == NULL)
++	  break;
++
++	if (daemon->htree_special_domains == NULL)
++	  daemon->htree_special_domains = htree_new_node (NULL, 0);
++
++	/* scan the address part first
++	 * --xxxx=/example.org/ample.com/temple.net/address-of-server
++	 *                                          ^                */
++	start_addr = NULL;
++	if (strchr (arg, '/') == NULL)
+ 	  {
+-	    if (!(newlist->flags & SERV_NO_REBIND))
+-	      newlist->flags |= SERV_NO_ADDR; /* no server */
++	    /* --xxxx=example.org (only availabe for --rebind-domain-ok) */
++	    if (option == LOPT_NO_REBIND)
++	      newserv.flags |= SERV_NO_REBIND;
++	    else if (option == 'S')
++	      start_addr = arg;  /* --server=8.8.8.8 */
+ 	  }
+-
+-	else if (strcmp(arg, "#") == 0)
+-	  newlist->flags |= SERV_USE_RESOLV; /* treat in ordinary way */
+ 	else
+ 	  {
+-	    char *err = parse_server(arg, &newlist->addr, &newlist->source_addr, newlist->interface, &newlist->flags);
+-	    if (err)
++	    for (s = arg; *s != '\0'; s++)
+ 	      {
+-	        server_list_free(newlist);
+-	        ret_err(err);
++		if (*s == '/')
++		  start_addr = s;
+ 	      }
++	    start_addr++;
+ 	  }
+-	
+-	serv = newlist;
+-	while (serv->next)
++
++	/* --xxxx=/example.org/# , here "#" means use standard server */
++	if (start_addr != NULL)
+ 	  {
+-	    serv->next->flags |= serv->flags & ~(SERV_HAS_DOMAIN | SERV_FOR_NODOTS);
+-	    serv->next->addr = serv->addr;
+-	    serv->next->source_addr = serv->source_addr;
+-	    strcpy(serv->next->interface, serv->interface);
+-	    serv = serv->next;
++	    if (*start_addr == '#') 
++	      newserv.flags |= SERV_USE_RESOLV;
++
++            /* --xxxx=/example.org/here-is-empty */
++            else if (*start_addr == '\0') {
++                /* give --server domain but no ip means the domain is local and
++                 * it may answer queries from /etc/hosts or DHCP but should
++                 * never be forwarded to upstream servers */
++                if (!(newserv.flags & SERV_NO_REBIND))
++                  newserv.flags |= SERV_NO_ADDR;        /* no server */
++            }
++
++            /* --xxxx=/example.org/8.8.8.8#53 at source-ip|interface#port
++             * --xxxx=8.8.8.8 */
++            else {
++                err =
++                  parse_server (start_addr, &newserv.addr, &newserv.source_addr,
++                                newserv.interface, &newserv.flags);
++                if (err)
++                  ret_err (err);
++	    }
+ 	  }
+-	serv->next = daemon->servers;
+-	daemon->servers = newlist;
++	/* --server */
++	if (servers_only && option == 'S')
++	  newserv.flags |= SERV_FROM_FILE;
++
++	/* --rebind-domain-ok */
++	if (option == LOPT_NO_REBIND)
++	  newserv.flags |= SERV_NO_REBIND;
++
++        /* --address will be handled inside the domain htree_node */
++        /* the arg pattern can be
++         * --xxxx=example.org (only availabe for --rebind-domain-ok) or
++         * --xxxx=/example.org/ or
++         * --xxxx=/example.org/ample.com/temple.net/ */
++        if (*arg == '/' || option == LOPT_NO_REBIND) {
++            int rebind = !(*arg == '/');
++            char *end = NULL;
++            if (!rebind)
++              arg++;
++            while (rebind || (end = split_chr (arg, '/'))) {
++                char *domain = NULL;
++                /* elide leading dots - they are implied in the search algorithm */
++                while (*arg == '.')
++                  arg++;
++
++                /* wrong config option --xxxx=/./1.2.3.4 */
++                if (strlen (arg) == 0)
++                  continue;
++
++                /* --address=/#/1.2.3.4
++                 * use label in the root node to mark #(match all domains) */
++                if (strcmp (arg, "#") == 0) {
++                    np = daemon->htree_special_domains;
++                    free(np->label);
++                    np->label = strdup("#");
++                } else if (!(domain = canonicalise_opt (arg)))
++                    option = '?';
++                else
++                    np = domain_find_or_add(daemon->htree_special_domains, domain);
++
++                free(domain);
++                /* domain unrecognizable */
++                if (np == NULL)
++                    continue;
++
++                if (np->ptr == NULL) {
++                    obj = opt_malloc (sizeof (struct special_domain));
++                    memset (obj, 0, sizeof (struct special_domain));
++                    obj->domain_flags = 0;
++                } else
++                    obj = (struct special_domain *) np->ptr;
++
++                obj->domain_flags = newserv.flags;
++                if (option == 'A') {
++                    obj->server = NULL;
++                    obj->domain_flags |= SERV_LITERAL_ADDRESS;
++                    memcpy (&obj->addr, &newserv.addr, sizeof (union mysockaddr));
++                } else if (option == 'S' || option == LOPT_LOCAL) {
++                    if (newserv.flags & SERV_NO_ADDR) {
++                        obj->server = NULL;
++                        obj->domain_flags = SERV_NO_ADDR;
++                    } else {
++                        /* pointer to one of servers in daemon->servers link
++                         * list, no memory will be leaked if obj->server been
++                         * overwritten */
++                        newserv.flags |= SERV_HAS_DOMAIN;
++                        obj->server = lookup_or_install_new_server (&newserv);
++                        obj->server->domain = NULL;
++                        obj->domain_flags |= SERV_HAS_DOMAIN;
++                    }
++                }
++
++                if (option == LOPT_NO_REBIND) {
++                    /* the rebind flag here instead of the one in struct server
++                     * will be used by forward */
++                    obj->domain_flags |= SERV_NO_REBIND;
++                }
++
++                if (option == LOPT_LOCAL)
++                    obj->domain_flags |= SERV_NO_ADDR;
++
++                np->ptr = (void *) obj;
++
++                arg = end;
++                if (rebind)
++                  break;
++            }
++          }
++	/* --server=8.8.8.8 */
++	else if ((strchr (arg, '/') == NULL && option == 'S'))
++	  lookup_or_install_new_server (&newserv);
+ 	break;
+       }
+ 
+@@ -2680,62 +2749,77 @@ static int one_opt(int option, char *arg, char *errstr, char *gen_err, int comma
+       break;
+ #else
+       {
+-	 struct ipsets ipsets_head;
+-	 struct ipsets *ipsets = &ipsets_head;
+-	 int size;
+-	 char *end;
+-	 char **sets, **sets_pos;
+-	 memset(ipsets, 0, sizeof(struct ipsets));
+-	 unhide_metas(arg);
+-	 if (arg && *arg == '/') 
+-	   {
+-	     arg++;
+-	     while ((end = split_chr(arg, '/'))) 
+-	       {
+-		 char *domain = NULL;
+-		 /* elide leading dots - they are implied in the search algorithm */
+-		 while (*arg == '.')
+-		   arg++;
+-		 /* # matches everything and becomes a zero length domain string */
+-		 if (strcmp(arg, "#") == 0 || !*arg)
+-		   domain = "";
+-		 else if (strlen(arg) != 0 && !(domain = canonicalise_opt(arg)))
+-		   ret_err(gen_err);
+-		 ipsets->next = opt_malloc(sizeof(struct ipsets));
+-		 ipsets = ipsets->next;
+-		 memset(ipsets, 0, sizeof(struct ipsets));
+-		 ipsets->domain = domain;
+-		 arg = end;
+-	       }
+-	   } 
+-	 else 
+-	   {
+-	     ipsets->next = opt_malloc(sizeof(struct ipsets));
+-	     ipsets = ipsets->next;
+-	     memset(ipsets, 0, sizeof(struct ipsets));
+-	     ipsets->domain = "";
+-	   }
+-	 
+-	 if (!arg || !*arg)
+-	   ret_err(gen_err);
+-	 
+-	 for (size = 2, end = arg; *end; ++end) 
+-	   if (*end == ',')
+-	       ++size;
+-     
+-	 sets = sets_pos = opt_malloc(sizeof(char *) * size);
+-	 
+-	 do {
+-	   end = split(arg);
+-	   *sets_pos++ = opt_string_alloc(arg);
+-	   arg = end;
+-	 } while (end);
+-	 *sets_pos = 0;
+-	 for (ipsets = &ipsets_head; ipsets->next; ipsets = ipsets->next)
+-	   ipsets->next->sets = sets;
+-	 ipsets->next = daemon->ipsets;
+-	 daemon->ipsets = ipsets_head.next;
+-	 
++        int size;
++        char *end;
++        char **sets, **sets_pos;
++        int sets_count = 0;
++        unhide_metas (arg);
++        struct htree_node *np = NULL;
++        struct htree_node *setname = NULL;
++        struct ipsets_names *obj;
++        char *domain = NULL;
++
++        if (daemon->htree_ipsets == NULL)
++          daemon->htree_ipsets = htree_new_node (NULL, 0);
++
++        if (daemon->htree_ipset_names == NULL)
++          daemon->htree_ipset_names = htree_new_node (NULL, 0);
++
++        if (arg && *arg == '/') {
++            arg++;
++            while ((end = split_chr (arg, '/'))) {
++                /* elide leading dots - they are implied in the search algorithm */
++                while (*arg == '.')
++                  arg++;
++                /* # matches everything and becomes a zero length domain string */
++                if (strcmp (arg, "#") == 0 || !*arg)
++                  /* ignore match all domain directive # for now */
++                  /* domain = ""; */
++                  ;
++                else if (strlen (arg) != 0 && !(domain = canonicalise_opt (arg)))
++                  option = '?';
++
++                if (domain != NULL)
++                  np = domain_find_or_add (daemon->htree_ipsets, domain);
++                free(domain);
++
++                arg = end;
++            }
++        }
++
++        if (!arg || !*arg) {
++            option = '?';
++            break;
++        }
++        size = 2;
++        for (end = arg; *end; ++end)
++          if (*end == ',')
++            ++size;
++
++        sets = sets_pos = opt_malloc (sizeof (char *) * size);
++
++        do {
++            end = split (arg);
++            // only store one copy of setname in daemon->htree_ipset_names
++            setname = htree_find_or_add(daemon->htree_ipset_names, arg);
++            *sets_pos++ = setname->label;
++            sets_count++;
++            arg = end;
++        } while (end);
++
++        struct ipsets_names *old_obj;
++        *sets_pos = NULL;
++        if (np != NULL) {
++            obj = opt_malloc(sizeof(struct ipsets_names));
++            obj->sets = sets;
++            obj->count = sets_count;
++            if (np->ptr != NULL) {
++                old_obj = (struct ipsets_names *) np->ptr;
++                free(old_obj->sets);
++                free(old_obj);
++            }
++            np->ptr = (void *) obj;
++        }
+ 	 break;
+       }
+ #endif

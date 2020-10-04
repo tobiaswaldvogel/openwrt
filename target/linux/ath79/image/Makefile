@@ -19,11 +19,6 @@ define Build/loader-kernel
 	$(call Build/loader-common,LOADER_DATA="$@")
 endef
 
-define Build/loader-kernel-cmdline
-	$(call Build/loader-common,LOADER_DATA="$@")
-endef
-
-
 define Build/loader-okli-compile
 	$(call Build/loader-common,FLASH_OFFS=$(LOADER_FLASH_OFFS) FLASH_MAX=0)
 endef
@@ -68,20 +63,16 @@ define Device/Default
 	append-rootfs | pad-rootfs | append-metadata | check-size
 endef
 
+include $(SUBTARGET).mk
+
 ifeq ($(SUBTARGET),generic)
-include ./generic.mk
-include ./generic-tp-link.mk
-include ./generic-ubnt.mk
+include generic-tp-link.mk
+include generic-ubnt.mk
 endif
-ifeq ($(SUBTARGET),mikrotik)
-include ./mikrotik.mk
-endif
-ifeq ($(SUBTARGET),nand)
-include ./nand.mk
-endif
+
 ifeq ($(SUBTARGET),tiny)
-include ./tiny.mk
-include ./tiny-netgear.mk
-include ./tiny-tp-link.mk
+include tiny-netgear.mk
+include tiny-tp-link.mk
 endif
+
 $(eval $(call BuildImage))

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
-/dts-v1/;
 
 #include "mt7621.dtsi"
 
@@ -15,10 +14,6 @@
 		led-failsafe = &power_amber;
 		led-running = &power_green;
 		led-upgrade = &power_amber;
-	};
-
-	chosen {
-		bootargs = "console=ttyS0,57600";
 	};
 
 	leds {

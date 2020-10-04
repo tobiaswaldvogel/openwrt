@@ -13,8 +13,30 @@ case "$board" in
 	ucidef_set_led_switch "wan" "WAN" "$boardname:orange:eth1" "switch0" "0x04"
 	;;
 alfa-network,ap121f|\
+alfa-network,ap121fe|\
 avm,fritz450e)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth0"
+	;;
+alfa-network,n2q)
+	ucidef_set_led_netdev "lan2" "LAN2" "$boardname:orange:lan2" "eth1"
+	ucidef_set_led_switch "lan1" "LAN1" "$boardname:orange:lan1" "switch0" "0x10"
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "signal1" "SIGNAL1" "$boardname:red:signal1" "wlan0" "1" "100"
+	ucidef_set_led_rssi "signal2" "SIGNAL2" "$boardname:orange:signal2" "wlan0" "33" "100"
+	ucidef_set_led_rssi "signal3" "SIGNAL3" "$boardname:green:signal3" "wlan0" "66" "100"
+	;;
+alfa-network,n5q)
+	ucidef_set_led_netdev "lan2" "LAN2" "$boardname:green:lan2" "eth1"
+	ucidef_set_led_switch "lan1" "LAN1" "$boardname:green:lan1" "switch0" "0x10"
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "signal1" "SIGNAL1" "$boardname:red:signal1" "wlan0" "1" "100"
+	ucidef_set_led_rssi "signal2" "SIGNAL2" "$boardname:orange:signal2" "wlan0" "25" "100"
+	ucidef_set_led_rssi "signal3" "SIGNAL3" "$boardname:green:signal3" "wlan0" "50" "100"
+	ucidef_set_led_rssi "signal4" "SIGNAL4" "$boardname:green:signal4" "wlan0" "75" "100"
+	;;
+alfa-network,r36a)
+	ucidef_set_led_netdev "lan" "LAN" "$boardname:blue:lan" "eth0"
+	ucidef_set_led_switch "wan" "WAN" "$boardname:blue:wan" "switch0" "0x10"
 	;;
 avm,fritz1750e)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth0"
@@ -38,6 +60,14 @@ avm,fritz4020)
 	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth1"
 	ucidef_set_led_switch "lan" "LAN" "$boardname:green:lan" "switch0" "0x1E"
 	;;
+avm,fritzdvbc)
+	ucidef_set_rssimon "wlan1" "200000" "1"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:green:rssilow" "wlan1" "1" "100"
+	ucidef_set_led_rssi "rssimediumlow" "RSSIMEDIUMLOW" "$boardname:green:rssimediumlow" "wlan1" "20" "100"
+	ucidef_set_led_rssi "rssimedium" "RSSIMEDIUM" "$boardname:green:rssimedium" "wlan1" "40" "100"
+	ucidef_set_led_rssi "rssimediumhigh" "RSSIMEDIUMHIGH" "$boardname:green:rssimediumhigh" "wlan1" "60" "100"
+	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "$boardname:green:rssihigh" "wlan1" "80" "100"
+	;;
 comfast,cf-e110n-v2)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth1"
 	ucidef_set_led_switch "wan" "WAN" "$boardname:green:wan" "switch0" "0x02"
@@ -51,6 +81,14 @@ comfast,cf-e110n-v2)
 comfast,cf-e120a-v3)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth1"
 	ucidef_set_led_switch "wan" "WAN" "$boardname:green:wan" "switch0" "0x04"
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:red:rssilow" "wlan0" "1" "100"
+	ucidef_set_led_rssi "rssimediumlow" "RSSIMEDIUMLOW" "$boardname:red:rssimediumlow" "wlan0" "26" "100"
+	ucidef_set_led_rssi "rssimediumhigh" "RSSIMEDIUMHIGH" "$boardname:green:rssimediumhigh" "wlan0" "51" "100"
+	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "$boardname:green:rssihigh" "wlan0" "76" "100"
+	;;
+comfast,cf-e130n-v2)
+	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth0"
 	ucidef_set_rssimon "wlan0" "200000" "1"
 	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:red:rssilow" "wlan0" "1" "100"
 	ucidef_set_led_rssi "rssimediumlow" "RSSIMEDIUMLOW" "$boardname:red:rssimediumlow" "wlan0" "26" "100"
@@ -90,22 +128,57 @@ comfast,cf-e560ac)
 	ucidef_set_led_switch "lan3" "LAN3" "$boardname:blue:lan3" "switch0" "0x08"
 	ucidef_set_led_switch "lan4" "LAN4" "$boardname:blue:lan4" "switch0" "0x10"
 	;;
-comfast,cf-ew72)
+comfast,cf-ew72|\
+telco,t1)
 	ucidef_set_led_switch "lan" "LAN" "$boardname:blue:lan" "switch0" "0x02"
 	ucidef_set_led_netdev "wan" "WAN" "$boardname:blue:wan" "eth1"
 	;;
 comfast,cf-wr752ac-v1|\
-engenius,ecb1750)
+engenius,ecb1750|\
+enterasys,ws-ap3705i)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:blue:lan" "eth0"
+	;;
+compex,wpj344-16m)
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "sig1" "SIG1" "wpj344:red:sig1" "wlan0" "85" "100"
+	ucidef_set_led_rssi "sig2" "SIG2" "wpj344:yellow:sig2" "wlan0" "75" "100"
+	ucidef_set_led_rssi "sig3" "SIG3" "wpj344:green:sig3" "wlan0" "65" "100"
+	ucidef_set_led_rssi "sig4" "SIG4" "wpj344:green:sig4" "wlan0" "50" "100"
+	;;
+compex,wpj531-16m)
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "sig1" "SIG1" "wpj531:red:sig1" "wlan0" "85" "100"
+	ucidef_set_led_rssi "sig2" "SIG2" "wpj531:yellow:sig2" "wlan0" "75" "100"
+	ucidef_set_led_rssi "sig3" "SIG3" "wpj531:green:sig3" "wlan0" "65" "100"
+	ucidef_set_led_rssi "sig4" "SIG4" "wpj531:green:sig4" "wlan0" "50" "100"
 	;;
 devolo,magic-2-wifi)
 	ucidef_set_led_netdev "plcw" "dLAN" "devolo:white:dlan" "eth0.1" "rx"
 	;;
-dlink,dir-842-c1|\
-dlink,dir-842-c2|\
-dlink,dir-842-c3|\
+dlink,dap-1330-a1|\
+dlink,dap-1365-a1)
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "d-link:red:rssilow" "wlan0" "1" "25"
+	ucidef_set_led_rssi "rssimediumlow" "RSSIMEDIUMLOW" "d-link:green:rssimediumlow" "wlan0" "1" "100"
+	ucidef_set_led_rssi "rssimediumhigh" "RSSIMEDIUMHIGH" "d-link:green:rssimediumhigh" "wlan0" "51" "100"
+	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "d-link:green:rssihigh" "wlan0" "76" "100"
+	;;
 dlink,dir-859-a1)
 	ucidef_set_led_switch "internet" "WAN" "$boardname:green:internet" "switch0" "0x20"
+	;;
+engenius,enh202-v1)
+	ucidef_set_led_switch "lan" "LAN" "$boardname:amber:lan" "switch0" "0x10"
+	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth0"
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:red:rssilow" "wlan0" "1"  "100"
+	ucidef_set_led_rssi "rssimedium" "RSSIMEDIUM" "$boardname:amber:rssimedium" "wlan0" "33" "100"
+	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "$boardname:green:rssihigh" "wlan0" "67" "100"
+	;;
+engenius,ens202ext-v1)
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:red:rssilow" "wlan0" "1"  "100"
+	ucidef_set_led_rssi "rssimedium" "RSSIMEDIUM" "$boardname:amber:rssimedium" "wlan0" "33" "100"
+	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "$boardname:green:rssihigh" "wlan0" "67" "100"
 	;;
 engenius,ews511ap)
 	ucidef_set_led_netdev "lan1" "LAN1" "$boardname:blue:lan1" "eth1"
@@ -119,18 +192,24 @@ glinet,6408|\
 glinet,6416)
 	ucidef_set_led_netdev "lan" "LAN" "gl-inet:green:lan" "eth0"
 	;;
-glinet,gl-ar150)
-	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth1"
-	ucidef_set_led_switch "lan" "LAN" "$boardname:green:lan" "switch0" "0x02"
-	;;
 glinet,gl-ar300m-lite)
 	ucidef_set_led_netdev "lan" "LAN" "gl-ar300m-lite:green:lan" "eth0"
 	;;
 glinet,gl-ar300m16)
 	ucidef_set_led_netdev "lan" "LAN" "gl-ar300m:green:lan" "eth0"
 	;;
+glinet,gl-mifi)
+	ucidef_set_led_switch "lan" "LAN" "$boardname:green:lan" "switch0" "0x02"
+	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth1"
+	;;
 glinet,gl-x750)
 	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth1"
+	;;
+hak5,lan-turtle)
+	ucidef_set_led_netdev "wan" "WAN" "$boardname:orange:system" "eth1"
+	;;
+meraki,mr16)
+	ucidef_set_led_netdev "wan" "WAN" "$boardname:green:wan" "eth0"
 	;;
 netgear,wnr2200-8m|\
 netgear,wnr2200-16m)
@@ -145,7 +224,7 @@ netgear,wnr2200-16m)
 	ucidef_set_led_switch "lan4amber" "LAN4 (amber)" "netgear:amber:lan4" "switch0" "0x10" "0x02"
 	;;
 pcs,cap324)
-	ucidef_set_led_netdev "lan" "LAN" "pcs:lan:green" "eth0"
+	ucidef_set_led_netdev "lan" "LAN" "pcs:green:lan" "eth0"
 	;;
 pcs,cr3000)
 	ucidef_set_led_netdev "wan" "WAN" "pcs:blue:wan" "eth1"
@@ -156,6 +235,9 @@ pcs,cr3000)
 	;;
 qihoo,c301)
 	ucidef_set_led_wlan "wlan" "WLAN" "$boardname:green:wlan" "phy0tpt"
+	;;
+samsung,wam250)
+	ucidef_set_led_netdev "lan" "LAN" "$boardname:white:lan" "eth0"
 	;;
 tplink,archer-a7-v5|\
 tplink,archer-c7-v4|\
@@ -210,6 +292,7 @@ tplink,cpe210-v1|\
 tplink,cpe220-v2|\
 tplink,cpe220-v3|\
 tplink,cpe510-v1|\
+tplink,wbs210-v1|\
 tplink,wbs210-v2|\
 tplink,wbs510-v1|\
 tplink,wbs510-v2)
@@ -240,13 +323,17 @@ tplink,cpe510-v3)
 	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "tp-link:green:link4" "wlan0" "76" "100" "-75" "13"
 	;;
 tplink,cpe610-v1|\
+tplink,cpe610-v2)
+	ucidef_set_led_netdev "lan" "LAN" "tp-link:green:lan" "eth0"
+	;;
 tplink,tl-wr902ac-v1)
 	ucidef_set_led_netdev "lan" "LAN" "tp-link:green:lan" "eth0"
 	ucidef_set_led_netdev "internet" "Internet" "tp-link:green:internet" "eth0"
 	;;
 tplink,re355-v1|\
 tplink,re450-v1|\
-tplink,re450-v2)
+tplink,re450-v2|\
+tplink,re450-v3)
 	ucidef_set_led_netdev "lan_data" "LAN Data" "tp-link:green:lan_data" "eth0" "tx rx"
 	ucidef_set_led_netdev "lan_link" "LAN Link" "tp-link:green:lan_link" "eth0" "link"
 	;;
@@ -254,6 +341,11 @@ tplink,tl-mr6400-v1)
 	ucidef_set_led_switch "lan" "LAN" "tp-link:white:lan" "switch0" "0x0e"
 	ucidef_set_led_netdev "wan" "WAN" "tp-link:white:wan" "eth1"
 	ucidef_set_led_netdev "4g" "4G" "tp-link:white:4g" "usb0"
+	;;
+tplink,tl-wpa8630-v1|\
+tplink,tl-wpa8630p-v2-eu|\
+tplink,tl-wpa8630p-v2-int)
+	ucidef_set_led_switch "lan" "LAN" "tp-link:green:lan" "switch0" "0x3c"
 	;;
 tplink,tl-wr842n-v2)
 	ucidef_set_led_netdev "wan" "WAN" "tp-link:green:wan" "eth1"
@@ -274,6 +366,7 @@ ubnt,nanostation-loco-m-xw|\
 ubnt,nanostation-m|\
 ubnt,nanostation-m-xw|\
 ubnt,picostation-m|\
+ubnt,powerbridge-m|\
 ubnt,rocket-m)
 	ucidef_set_rssimon "wlan0" "200000" "1"
 	ucidef_set_led_rssi "rssilow" "RSSILOW" "ubnt:red:link1" "wlan0" "1" "100"
@@ -282,17 +375,27 @@ ubnt,rocket-m)
 	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "ubnt:green:link4" "wlan0" "76" "100"
 	;;
 ubnt,nanobeam-ac|\
-ubnt,nanostation-ac)
+ubnt,nanostation-ac|\
+ubnt,powerbeam-5ac-gen2)
 	ucidef_set_rssimon "wlan0" "200000" "1"
 	ucidef_set_led_rssi "rssilow" "RSSILOW" "ubnt:blue:rssi0" "wlan0" "1" "100"
 	ucidef_set_led_rssi "rssimediumlow" "RSSIMEDIUMLOW" "ubnt:blue:rssi1" "wlan0" "26" "100"
 	ucidef_set_led_rssi "rssimediumhigh" "RSSIMEDIUMHIGH" "ubnt:blue:rssi2" "wlan0" "51" "100"
 	ucidef_set_led_rssi "rssihigh" "RSSIHIGH" "ubnt:blue:rssi3" "wlan0" "76" "100"
 	;;
+wallys,dr531)
+	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth0"
+	ucidef_set_led_switch "wan" "WAN" "$boardname:green:wan" "switch0" "0x2"
+	ucidef_set_rssimon "wlan0" "200000" "1"
+	ucidef_set_led_rssi "sig1" "SIG1" "$boardname:green:sig1" "wlan0" "1" "100"
+	ucidef_set_led_rssi "sig2" "SIG2" "$boardname:green:sig2" "wlan0" "25" "100"
+	ucidef_set_led_rssi "sig3" "SIG3" "$boardname:green:sig3" "wlan0" "50" "100"
+	ucidef_set_led_rssi "sig4" "SIG4" "$boardname:green:sig4" "wlan0" "75" "100"
+	;;
 wd,mynet-wifi-rangeextender)
 	ucidef_set_led_netdev "lan" "LAN" "$boardname:green:lan" "eth0"
 	ucidef_set_rssimon "wlan0" "200000" "1"
-	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:rssi-low" "wlan0" "1" "100"
+	ucidef_set_led_rssi "rssilow" "RSSILOW" "$boardname:blue:rssi-low" "wlan0" "1" "100"
 	ucidef_set_led_rssi "rssimedium" "RSSIMED" "$boardname:blue:rssi-med" "wlan0" "33" "100"
 	ucidef_set_led_rssi "rssihigh" "RSSIMAX" "$boardname:blue:rssi-max" "wlan0" "66" "100"
 	;;

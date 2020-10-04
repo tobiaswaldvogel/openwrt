@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 
-#include <dt-bindings/gpio/gpio.h>
-
 #include "qca9556_avm_fritz-repeater.dtsi"
 
+#include <dt-bindings/gpio/gpio.h>
+
 / {
-	compatible = "avm,fritz450e", "qca,qca9557";
+	compatible = "avm,fritz450e", "qca,qca9556";
 	model = "AVM FRITZ!WLAN Repeater 450E";
 
 	aliases {

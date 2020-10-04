@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
-#include <dt-bindings/clock/ath79-clk.h>
+
 #include "ath79.dtsi"
 
 / {
@@ -7,6 +7,10 @@
 
 	#address-cells = <1>;
 	#size-cells = <1>;
+
+	chosen {
+		bootargs = "console=ttyS0,115200n8";
+	};
 
 	cpus {
 		#address-cells = <1>;

@@ -1,5 +1,3 @@
-/dts-v1/;
-
 #include "mt7620a_phicomm_psg1218.dtsi"
 
 / {
@@ -44,7 +42,9 @@
 &ethernet {
 	pinctrl-names = "default";
 	pinctrl-0 = <&ephy_pins>;
+
 	mtd-mac-address = <&factory 0x28>;
+
 	mediatek,portmap = "llllw";
 };
 

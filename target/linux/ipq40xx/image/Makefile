@@ -13,6 +13,7 @@ define Device/Default
 	KERNEL_LOADADDR := 0x80208000
 	DEVICE_DTS = $$(SOC)-$(lastword $(subst _, ,$(1)))
 	SUPPORTED_DEVICES := $(subst _,$(comma),$(1))
+	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin = sysupgrade-tar | append-metadata
 	IMAGE/sysupgrade.bin/squashfs :=
 endef
@@ -43,14 +44,13 @@ define Device/UbiFit
 endef
 
 define Device/DniImage
-	KERNEL_SUFFIX := -fit-uImage.itb
-	KERNEL = kernel-bin | gzip | fit gzip $$(DTS_DIR)/$$(DEVICE_DTS).dtb
-	KERNEL_NAME := Image
+	$(call Device/FitzImage)
 	NETGEAR_BOARD_ID :=
 	NETGEAR_HW_ID :=
-	IMAGES := factory.img sysupgrade.bin
+	IMAGES += factory.img
 	IMAGE/factory.img := append-kernel | pad-offset 64k 64 | append-uImage-fakehdr filesystem | append-rootfs | pad-rootfs | netgear-dni
-	IMAGE/sysupgrade.bin := append-kernel | pad-offset 64k 64 | append-uImage-fakehdr filesystem | append-rootfs | pad-rootfs | append-metadata
+	IMAGE/sysupgrade.bin := append-kernel | pad-offset 64k 64 | append-uImage-fakehdr filesystem | \
+		append-rootfs | pad-rootfs | append-metadata | check-size
 endef
 
 define Build/append-rootfshdr
@@ -111,7 +111,6 @@ define Device/8dev_habanero-dvk
 	IMAGE_SIZE := 30976k
 	SOC := qcom-ipq4019
 	DEVICE_PACKAGES := ipq-wifi-8dev_habanero-dvk
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | pad-to 64k | append-rootfs | pad-rootfs | append-metadata | check-size
 endef
 TARGET_DEVICES += 8dev_habanero-dvk
@@ -147,32 +146,37 @@ define Device/alfa-network_ap120c-ac
 endef
 TARGET_DEVICES += alfa-network_ap120c-ac
 
-define Device/aruba_ap-303
+define Device/aruba_glenmorangie
 	$(call Device/FitImageLzma)
 	DEVICE_VENDOR := Aruba
-	DEVICE_MODEL := AP-303
 	SOC := qcom-ipq4029
 	DEVICE_PACKAGES := ipq-wifi-aruba_ap-303
-	IMAGES := sysupgrade.bin
+endef
+
+define Device/aruba_ap-303
+	$(call Device/aruba_glenmorangie)
+	DEVICE_MODEL := AP-303
 endef
 TARGET_DEVICES += aruba_ap-303
 
 define Device/aruba_ap-303h
-	$(call Device/FitImageLzma)
-	DEVICE_VENDOR := Aruba
+	$(call Device/aruba_glenmorangie)
 	DEVICE_MODEL := AP-303H
-	SOC := qcom-ipq4029
-	DEVICE_PACKAGES := ipq-wifi-aruba_ap-303
-	IMAGES := sysupgrade.bin
 endef
 TARGET_DEVICES += aruba_ap-303h
+
+define Device/aruba_ap-365
+	$(call Device/aruba_glenmorangie)
+	DEVICE_MODEL := AP-365
+	DEVICE_PACKAGES += kmod-hwmon-ad7418
+endef
+TARGET_DEVICES += aruba_ap-365
 
 define Device/asus_map-ac2200
 	$(call Device/FitImageLzma)
 	DEVICE_VENDOR := ASUS
 	DEVICE_MODEL := Lyra (MAP-AC2200)
 	SOC := qcom-ipq4019
-	IMAGES := sysupgrade.bin
 	DEVICE_PACKAGES := ath10k-firmware-qca9888-ct kmod-ath3k
 endef
 TARGET_DEVICES += asus_map-ac2200
@@ -193,7 +197,6 @@ define Device/asus_rt-ac58u
 #	to add a version... or we are very careful not to add '\0' into that
 #	string and call it a day.... Yeah, we do the latter!
 	UIMAGE_NAME:=$(shell echo -e '\03\01\01\01RT-AC58U')
-	IMAGES := sysupgrade.bin
 	DEVICE_PACKAGES := -kmod-ath10k-ct kmod-ath10k-ct-smallbuffers \
 		kmod-usb-ledtrig-usbport
 endef
@@ -208,9 +211,9 @@ define Device/avm_fritzbox-4040
 	IMAGE_SIZE := 29056k
 	UBOOT_PATH := $(STAGING_DIR_IMAGE)/uboot-fritz4040.bin
 	UBOOT_PARTITION_SIZE := 524288
-	IMAGES = eva.bin sysupgrade.bin
+	IMAGES += eva.bin
 	IMAGE/eva.bin := append-uboot | pad-to $$$$(UBOOT_PARTITION_SIZE) | append-kernel | append-rootfs | pad-rootfs
-	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata | check-size
 	DEVICE_PACKAGES := fritz-tffs fritz-caldata
 endef
 TARGET_DEVICES += avm_fritzbox-4040
@@ -221,7 +224,6 @@ define Device/avm_fritzbox-7530
 	DEVICE_MODEL := FRITZ!Box 7530
 	SOC := qcom-ipq4019
 	DEVICE_PACKAGES := fritz-caldata fritz-tffs-nand
-	IMAGES := sysupgrade.bin
 endef
 TARGET_DEVICES += avm_fritzbox-7530
 
@@ -231,7 +233,6 @@ define Device/avm_fritzrepeater-1200
 	DEVICE_MODEL := FRITZ!Repeater 1200
 	SOC := qcom-ipq4019
 	DEVICE_PACKAGES := fritz-caldata fritz-tffs-nand ipq-wifi-avm_fritzrepeater-1200
-	IMAGES := sysupgrade.bin
 endef
 TARGET_DEVICES += avm_fritzrepeater-1200
 
@@ -241,9 +242,20 @@ define Device/avm_fritzrepeater-3000
 	DEVICE_MODEL := FRITZ!Repeater 3000
 	SOC := qcom-ipq4019
 	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct fritz-caldata fritz-tffs-nand
-	IMAGES := sysupgrade.bin
 endef
 TARGET_DEVICES += avm_fritzrepeater-3000
+
+define Device/buffalo_wtr-m2133hp
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Buffalo
+	DEVICE_MODEL := WTR-M2133HP
+	SOC := qcom-ipq4019
+	DEVICE_PACKAGES := uboot-envtools ath10k-firmware-qca9984-ct ipq-wifi-buffalo_wtr-m2133hp
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+endef
+TARGET_DEVICES += buffalo_wtr-m2133hp
 
 define Device/cellc_rtl30vw
 	KERNEL_SUFFIX := -fit-uImage.itb
@@ -298,7 +310,7 @@ define Device/compex_wpj428
 	BLOCKSIZE := 64k
 	IMAGE_SIZE := 31232k
 	KERNEL_SIZE := 4096k
-	IMAGES = sysupgrade.bin cpximg-6a04.bin
+	IMAGES += cpximg-6a04.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
 	IMAGE/cpximg-6a04.bin := append-kernel | append-rootfs | pad-rootfs | mkmylofw_32m 0x8A2 3
 	DEVICE_PACKAGES := kmod-gpio-beeper
@@ -315,7 +327,7 @@ define Device/dlink_dap-2610
 	WRGG_DEVNAME := /dev/mtdblock/8
 	WRGG_SIGNATURE := wapac30_dkbs_dap2610
 	IMAGE_SIZE := 14080k
-	IMAGES := sysupgrade.bin factory.bin
+	IMAGES += factory.bin
 	# Bootloader expects a special 160 byte header which is added by
 	# wrgg-image.
 	# Factory image size must be larger than 6MB, and size in wrgg header must
@@ -332,6 +344,32 @@ define Device/dlink_dap-2610
 endef
 TARGET_DEVICES += dlink_dap-2610
 
+define Device/edgecore_ecw5211
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_TITLE := Edgecore ECW5211
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	DEVICE_DTS_CONFIG := config@ap.dk01.1-c2
+	DEVICE_DTS := qcom-ipq4018-ecw5211
+	DEVICE_PACKAGES := ipq-wifi-edgecore_ecw5211 kmod-tpm-i2c-atmel kmod-usb-acm uboot-envtools
+endef
+TARGET_DEVICES += edgecore_ecw5211
+
+define Device/edgecore_oap100
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := Edgecore
+	DEVICE_MODEL := OAP100
+	SOC := qcom-ipq4019
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	IMAGES := nand-sysupgrade.bin
+	DEVICE_DTS_CONFIG := config@ap.dk07.1-c1
+	DEVICE_PACKAGES := ipq-wifi-edgecore_oap100 kmod-usb-acm kmod-usb-net kmod-usb-net-cdc-qmi uqmi
+endef
+TARGET_DEVICES += edgecore_oap100
+
 define Device/engenius_eap1300
 	$(call Device/FitImage)
 	DEVICE_VENDOR := EnGenius
@@ -341,7 +379,6 @@ define Device/engenius_eap1300
 	SOC := qcom-ipq4018
 	KERNEL_SIZE := 5120k
 	IMAGE_SIZE := 25344k
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
 endef
 TARGET_DEVICES += engenius_eap1300
@@ -365,11 +402,25 @@ define Device/engenius_emd1
 	DEVICE_DTS_CONFIG := config@4
 	SOC := qcom-ipq4018
 	IMAGE_SIZE := 30720k
-	IMAGES := sysupgrade.bin factory.bin
+	IMAGES += factory.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
 	IMAGE/factory.bin := qsdk-ipq-factory-nor | check-size
 endef
 TARGET_DEVICES += engenius_emd1
+
+define Device/engenius_emr3500
+	$(call Device/FitImage)
+	DEVICE_VENDOR := EnGenius
+	DEVICE_MODEL := EMR3500
+	DEVICE_DTS_CONFIG := config@4
+	SOC := qcom-ipq4018
+	KERNEL_SIZE := 4096k
+	IMAGE_SIZE := 30720k
+	IMAGES += factory.bin
+	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+	IMAGE/factory.bin := qsdk-ipq-factory-nor | check-size
+endef
+TARGET_DEVICES += engenius_emr3500
 
 define Device/engenius_ens620ext
 	$(call Device/FitImage)
@@ -390,7 +441,7 @@ define Device/engenius_ens620ext
 	IMAGE_SIZE := 21312k
 	KERNEL_SIZE := 5120k
 	FILESYSTEMS := squashfs
-	IMAGES := sysupgrade.bin factory_30.bin factory_35.bin
+	IMAGES += factory_30.bin factory_35.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | check-size | append-metadata
 	IMAGE/factory_30.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size | SenaoFW $$$$(PRODUCT_ID) $$$$(FW_VER)
 	IMAGE/factory_35.bin := qsdk-ipq-factory-nor | check-size | SenaoFW $$$$(PRODUCT_ID_NEW) $$$$(FW_VER_NEW)
@@ -405,7 +456,6 @@ define Device/ezviz_cs-w3-wd1200g-eup
 	DEVICE_DTS_CONFIG := config@4
 	IMAGE_SIZE := 14848k
 	SOC := qcom-ipq4018
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | \
 		append-metadata
 	DEVICE_PACKAGES := -kmod-ath10k-ct kmod-ath10k-ct-smallbuffers \
@@ -421,10 +471,22 @@ define Device/glinet_gl-b1300
 	SOC := qcom-ipq4029
 	KERNEL_SIZE := 4096k
 	IMAGE_SIZE := 26624k
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel |append-rootfs | pad-rootfs | append-metadata
 endef
 TARGET_DEVICES += glinet_gl-b1300
+
+define Device/glinet_gl-s1300
+	$(call Device/FitImage)
+	DEVICE_VENDOR := GL.iNet
+	DEVICE_MODEL := GL-S1300
+	SOC := qcom-ipq4029
+	KERNEL_SIZE := 4096k
+	IMAGE_SIZE := 26624k
+	IMAGES := sysupgrade.bin
+	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+	DEVICE_PACKAGES := ipq-wifi-glinet_gl-s1300 kmod-fs-ext4 kmod-mmc kmod-spi-dev
+endef
+TARGET_DEVICES += glinet_gl-s1300
 
 define Device/linksys_ea6350v3
 	# The Linksys EA6350v3 has a uboot bootloader that does not
@@ -457,7 +519,7 @@ define Device/linksys_ea6350v3
 	KERNEL_SIZE := 3072k
 	IMAGE_SIZE := 37888k
 	UBINIZE_OPTS := -E 5
-	IMAGES := factory.bin sysupgrade.bin
+	IMAGES += factory.bin
 	IMAGE/factory.bin := append-kernel | append-uImage-fakehdr filesystem | pad-to $$$$(KERNEL_SIZE) | append-ubi | linksys-image type=EA6350v3
 	DEVICE_PACKAGES := uboot-envtools
 endef
@@ -473,11 +535,39 @@ define Device/linksys_ea8300
 	BLOCKSIZE := 128k
 	PAGESIZE := 2048
 	UBINIZE_OPTS := -E 5    # EOD marks to "hide" factory sig at EOF
-	IMAGES := sysupgrade.bin factory.bin
+	IMAGES += factory.bin
 	IMAGE/factory.bin  := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-ubi | linksys-image type=EA8300
 	DEVICE_PACKAGES := uboot-envtools ath10k-firmware-qca9888-ct ipq-wifi-linksys_ea8300 kmod-usb-ledtrig-usbport
 endef
 TARGET_DEVICES += linksys_ea8300
+
+define Device/linksys_mr8300
+	$(call Device/FitzImage)
+	DEVICE_VENDOR := Linksys
+	DEVICE_MODEL := MR8300
+	SOC := qcom-ipq4019
+	KERNEL_SIZE := 3072k
+	IMAGE_SIZE := 87040k
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	UBINIZE_OPTS := -E 5    # EOD marks to "hide" factory sig at EOF
+	IMAGES += factory.bin
+	IMAGE/factory.bin  := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-ubi | linksys-image type=MR8300
+	DEVICE_PACKAGES := uboot-envtools ath10k-firmware-qca9888-ct ipq-wifi-linksys_mr8300-v0 kmod-usb-ledtrig-usbport
+endef
+TARGET_DEVICES += linksys_mr8300
+
+define Device/luma_wrtq-329acn
+	$(call Device/FitImage)
+	DEVICE_VENDOR := Luma Home
+	DEVICE_MODEL := WRTQ-329ACN
+	SOC := qcom-ipq4018
+	DEVICE_PACKAGES := ipq-wifi-luma_wrtq-329acn kmod-ath3k kmod-eeprom-at24 kmod-i2c-gpio uboot-envtools
+	IMAGE_SIZE := 76632k
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+endef
+TARGET_DEVICES += luma_wrtq-329acn
 
 define Device/meraki_mr33
 	$(call Device/FitImage)
@@ -486,7 +576,6 @@ define Device/meraki_mr33
 	SOC := qcom-ipq4029
 	BLOCKSIZE := 128k
 	PAGESIZE := 2048
-	IMAGES = sysupgrade.bin
 	DEVICE_PACKAGES := -swconfig ath10k-firmware-qca9887-ct
 endef
 TARGET_DEVICES += meraki_mr33
@@ -508,6 +597,7 @@ define Device/netgear_ex61x0v2
 	DEVICE_DTS_CONFIG := config@4
 	NETGEAR_BOARD_ID := EX6150v2series
 	NETGEAR_HW_ID := 29765285+16+0+128+2x2
+	IMAGE_SIZE := 14400k
 	SOC := qcom-ipq4018
 endef
 
@@ -536,7 +626,7 @@ define Device/openmesh_a42
 	BLOCKSIZE := 64k
 	KERNEL = kernel-bin | lzma | fit lzma $$(DTS_DIR)/$$(DEVICE_DTS).dtb | pad-to $$(BLOCKSIZE)
 	IMAGE_SIZE := 15616k
-	IMAGES = factory.bin sysupgrade.bin
+	IMAGES += factory.bin
 	IMAGE/factory.bin := append-rootfs | pad-rootfs | openmesh-image ce_type=A42
 	IMAGE/sysupgrade.bin/squashfs := append-rootfs | pad-rootfs | sysupgrade-tar rootfs=$$$$@ | append-metadata
 	DEVICE_PACKAGES := uboot-envtools
@@ -552,7 +642,7 @@ define Device/openmesh_a62
 	BLOCKSIZE := 64k
 	KERNEL = kernel-bin | lzma | fit lzma $$(DTS_DIR)/$$(DEVICE_DTS).dtb | pad-to $$(BLOCKSIZE)
 	IMAGE_SIZE := 15552k
-	IMAGES = factory.bin sysupgrade.bin
+	IMAGES += factory.bin
 	IMAGE/factory.bin := append-rootfs | pad-rootfs | openmesh-image ce_type=A62
 	IMAGE/sysupgrade.bin/squashfs := append-rootfs | pad-rootfs | sysupgrade-tar rootfs=$$$$@ | append-metadata
 	DEVICE_PACKAGES := ath10k-firmware-qca9888-ct uboot-envtools
@@ -571,7 +661,6 @@ define Device/qcom_ap-dk01.1-c1
 	KERNEL_SIZE := 4096k
 	IMAGE_SIZE := 26624k
 	$(call Device/FitImage)
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata
 endef
 TARGET_DEVICES += qcom_ap-dk01.1-c1
@@ -601,7 +690,6 @@ define Device/qxwlan_e2600ac-c1
 	SOC := qcom-ipq4019
 	KERNEL_SIZE := 4096k
 	IMAGE_SIZE := 31232k
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
 	DEVICE_PACKAGES := ipq-wifi-qxwlan_e2600ac
 endef
@@ -630,7 +718,6 @@ define Device/unielec_u4019-32m
 	SOC := qcom-ipq4019
 	KERNEL_SIZE := 4096k
 	IMAGE_SIZE := 31232k
-	IMAGES := sysupgrade.bin
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
 endef
 TARGET_DEVICES += unielec_u4019-32m
@@ -640,12 +727,13 @@ define Device/zyxel_nbg6617
 	DEVICE_VENDOR := ZyXEL
 	DEVICE_MODEL := NBG6617
 	SOC := qcom-ipq4018
+	KERNEL_SIZE := 4096k
 	ROOTFS_SIZE := 24960k
 	RAS_BOARD := NBG6617
 	RAS_ROOTFS_SIZE := 19840k
 	RAS_VERSION := "$(VERSION_DIST) $(REVISION)"
 	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
-	IMAGES := sysupgrade.bin factory.bin
+	IMAGES += factory.bin
 #	The ZyXEL firmware allows flashing thru the web-gui only when the rootfs is
 #	at least as large as the one of the initial firmware image (not the current
 #	one on the device). This only applies to the Web-UI, the bootlaoder ignores
@@ -662,8 +750,8 @@ define Device/zyxel_wre6606
 	DEVICE_MODEL := WRE6606
 	DEVICE_DTS_CONFIG := config@4
 	SOC := qcom-ipq4018
-	IMAGES := sysupgrade.bin
-	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+	IMAGE_SIZE := 13184k
+	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata | check-size
 	DEVICE_PACKAGES := -kmod-ath10k-ct kmod-ath10k-ct-smallbuffers
 endef
 TARGET_DEVICES += zyxel_wre6606

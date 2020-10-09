@@ -1,0 +1,11 @@
+--- a/ath10k-5.4/mac.c
++++ b/ath10k-5.4/mac.c
+@@ -10163,7 +10163,7 @@
+ 	if (test_bit(WMI_SERVICE_TDLS_UAPSD_BUFFER_STA, ar->wmi.svc_map))
+ 		ieee80211_hw_set(ar->hw, SUPPORTS_TDLS_BUFFER_STA);
+ 
+-	ar->hw->wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
++//	ar->hw->wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
+ 	ar->hw->wiphy->flags |= WIPHY_FLAG_HAS_CHANNEL_SWITCH;
+ 	ar->hw->wiphy->max_remain_on_channel_duration = 5000;
+ 

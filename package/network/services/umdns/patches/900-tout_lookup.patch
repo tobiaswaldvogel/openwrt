@@ -1,0 +1,46 @@
+diff --git a/service.c b/service.c
+index bd9f985..dc7f330 100644
+--- a/service.c
++++ b/service.c
+@@ -35,6 +35,7 @@
+ #include "announce.h"
+ 
+ enum {
++	SERVICE_TOUT_LOOKUP,
+ 	SERVICE_INSTANCE,
+ 	SERVICE_SERVICE,
+ 	SERVICE_PORT,
+@@ -51,12 +52,14 @@ struct service {
+ 	const char *instance;
+ 	const char *service;
+ 	const uint8_t *txt;
++	int32_t tout_lookup;
+ 	int txt_len;
+ 	int port;
+ 	int active;
+ };
+ 
+ static const struct blobmsg_policy service_policy[__SERVICE_MAX] = {
++	[SERVICE_TOUT_LOOKUP] = { .name = "timeout_lookup", .type = BLOBMSG_TYPE_INT32 },
+ 	[SERVICE_INSTANCE] = { .name = "instance", .type = BLOBMSG_TYPE_STRING },
+ 	[SERVICE_SERVICE] = { .name = "service", .type = BLOBMSG_TYPE_STRING },
+ 	[SERVICE_PORT] = { .name = "port", .type = BLOBMSG_TYPE_INT32 },
+@@ -122,8 +125,8 @@ service_timeout(struct service *s)
+ {
+ 	time_t t = monotonic_time();
+ 
+-	if (t - s->t <= TOUT_LOOKUP) {
+-		DBG(2, "t=%" PRId64 ", s->t=%" PRId64 ", t - s->t = %" PRId64 "\n", (int64_t)t, (int64_t)s->t, (int64_t)(t - s->t));
++	if (t - s->t <= s->tout_lookup) {
++		DBG(2, "t=%" PRId64 ", s->t=%" PRId64 ", s->tout_lookup=%d, t - s->t = %" PRId64 "\n", (int64_t)t, (int64_t)s->t, s->tout_lookup, (int64_t)(t - s->t));
+ 		return 0;
+ 	}
+ 
+@@ -239,6 +242,7 @@ service_load_blob(struct blob_attr *b)
+ 	if (!s)
+ 		return;
+ 
++	s->tout_lookup = _tb[SERVICE_TOUT_LOOKUP] ? blobmsg_get_u32(_tb[SERVICE_TOUT_LOOKUP]) : TOUT_LOOKUP;
+ 	s->port = blobmsg_get_u32(_tb[SERVICE_PORT]);
+ 	s->id = strncpy(d_id, blobmsg_name(b), n);
+ 	if (_tb[SERVICE_INSTANCE])
